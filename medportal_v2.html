@@ -1,0 +1,285 @@
+<script>
+  const PASS_THRESHOLD = 0.7;
+  const TIMER_SECONDS = 1200;
+
+  let timerInterval, timerSeconds, isTimerRunning = false;
+  let currentTestBlock = null;
+  let questions = [];
+
+  function init() {
+    const url = localStorage.getItem('gsheets_url') || '';
+    if (!url) {
+      showPage('settings');
+      return;
+    }
+    loadContent(url);
+  }
+
+  function saveGSheetsUrl() {
+    const input = document.getElementById('gsheets-url');
+    const url = (input ? input.value : '').trim();
+    if (!url) return alert('Введите URL веб‑приложения');
+    localStorage.setItem('gsheets_url', url);
+    location.reload();
+  }
+
+  async function loadContent(url) {
+    try {
+      const res = await fetch(url + '?action=get_content');
+      if (!res.ok) throw new Error('Network error: ' + res.status);
+      const data = await res.json();
+
+      const blocksList = document.getElementById('blocks-list');
+      if (!blocksList) throw new Error('Missing blocks-list element');
+
+      blocksList.innerHTML = '';
+      data.blocks.forEach(b => {
+        const card = document.createElement('div');
+        card.className = 'block-card';
+        card.innerHTML = `
+          <h3>${b.title}</h3>
+          <p>${b.desc || ''}</p>
+          <button class="btn" onclick="openBlock('${b.id}')">Открыть</button>
+        `;
+        blocksList.appendChild(card);
+      });
+
+      window.blocksData = data.blocks;
+    } catch (e) {
+      console.error(e);
+      // Если загрузка не удалась — показываем настройки, чтобы можно было поправить URL
+      alert('Не удалось загрузить контент. Проверьте URL и настройки Google Apps Script.');
+      showPage('settings');
+    }
+  }
+
+  function openBlock(id) {
+    const block = window.blocksData?.find(b => b.id === id);
+    if (!block) return;
+
+    const pageId = 'block-' + id;
+    let page = document.getElementById(pageId);
+    if (!page) {
+      page = document.createElement('div');
+      page.id = pageId;
+      page.className = 'page hidden';
+      document.querySelector('.container').appendChild(page);
+    }
+
+    page.innerHTML = `
+      <div class="card">
+        <h2>${block.title}</h2>
+        <div>${block.content || ''}</div>
+        ${block.link ? `<p><a href="${block.link}" target="_blank" class="btn">🔗 Документ</a></p>` : ''}
+        <p style="margin:1.5rem 0;"><strong>Тест по блоку:</strong></p>
+        <button class="btn" onclick="startTest('${id}')">Пройти тест</button>
+        <a href="#" onclick="showPage('home')" style="color:var(--primary);">← Назад</a>
+      </div>
+    `;
+    showPage(pageId);
+  }
+
+  async function startTest(blockId) {
+    currentTestBlock = blockId;
+    const url = localStorage.getItem('gsheets_url');
+    if (!url) return showPage('settings');
+
+    try {
+      const res = await fetch(url + `?action=get_test&block_id=${blockId}`);
+      if (!res.ok) throw new Error('Test load error: ' + res.status);
+      const data = await res.json();
+      questions = data.questions || [];
+    } catch (e) {
+      console.error(e);
+      return alert('Ошибка загрузки теста. Проверьте Google Apps Script и URL.');
+    }
+
+    if (questions.length === 0) return alert('Нет вопросов для этого блока.');
+
+    questions = questions.sort(() => Math.random() - 0.5);
+
+    const pageId = 'test-' + blockId;
+    let page = document.getElementById(pageId);
+    if (!page) {
+      page = document.createElement('div');
+      page.id = pageId;
+      page.className = 'page';
+      document.querySelector('.container').appendChild(page);
+    }
+
+    renderTestPage(page, 0);
+    startTimer();
+  }
+
+  function renderTestPage(pageEl, qIndex) {
+    const q = questions[qIndex];
+    if (!q) return finishTest();
+
+    const options = [];
+    for (let i = 1; i <= 4; i++) {
+      if (q['option' + i]) options.push(q['option' + i]);
+    }
+    options.sort(() => Math.random() - 0.5);
+
+    let optionsHtml = '';
+    options.forEach((opt, idx) => {
+      optionsHtml += `<label><input type="radio" name="answer" value="${opt}" /> ${opt}</label><br />`;
+    });
+
+    pageEl.innerHTML = `
+      <div class="card">
+        <h3>Вопрос ${qIndex + 1} из ${questions.length}</h3>
+        <p>${q.question}</p>
+        <form onsubmit="handleAnswer(event, ${qIndex})">
+          ${optionsHtml}
+          <br />
+          <button type="submit" class="btn">Далее</button>
+        </form>
+      </div>
+    `;
+  }
+
+  function handleAnswer(e, qIndex) {
+    e.preventDefault();
+    const selected = document.querySelector('input[name="answer"]:checked');
+    if (!selected) return alert('Выберите ответ');
+
+    const userAnswer = selected.value;
+    const correctAnswer = questions[qIndex].correct;
+
+    if (!window.testAnswers) window.testAnswers = [];
+    window.testAnswers.push({
+      question: questions[qIndex].question,
+      user: userAnswer,
+      correct: correctAnswer,
+      isCorrect: userAnswer === correctAnswer
+    });
+
+    renderTestPage(document.getElementById('test-' + currentTestBlock), qIndex + 1);
+  }
+
+  function finishTest() {
+    stopTimer();
+    const total = window.testAnswers?.length || 0;
+    const correct = window.testAnswers?.filter(a => a.isCorrect).length || 0;
+    const percent = total ? (correct / total) * 100 : 0;
+    const passed = percent >= PASS_THRESHOLD * 100;
+
+    const resultPageId = 'result-' + currentTestBlock;
+    let resultPage = document.getElementById(resultPageId);
+    if (!resultPage) {
+      resultPage = document.createElement('div');
+      resultPage.id = resultPageId;
+      resultPage.className = 'page';
+      document.querySelector('.container').appendChild(resultPage);
+    }
+
+    resultPage.innerHTML = `
+      <div class="card">
+        <h2>Результаты теста</h2>
+        <p><strong>Блок:</strong> ${getBlockTitle(currentTestBlock)}</p>
+        <p><strong>Балл:</strong> ${correct} / ${total} (${percent.toFixed(1)}%)</p>
+        <p><strong>Статус:</strong> <span class="status-badge ${passed ? 'status-passed' : 'status-failed'}">
+          ${passed ? 'СДАН' : 'НЕ СДАН'}
+        </span></p>
+        <p><strong>Время:</strong> ${formatTime(TIMER_SECONDS - timerSeconds)}</p>
+        <button class="btn" onclick="sendResults('${currentTestBlock}', '${correct}', '${total}', '${percent}', '${formatTime(TIMER_SECONDS - timerSeconds)}')">Сохранить результат</button>
+        <br /><br />
+        <details>
+          <summary>Показать разбор ответов</summary>
+          <table class="results-table">
+            <thead><tr><th>Вопрос</th><th>Ваш ответ</th><th>Правильный</th><th>Верно?</th></tr></thead>
+            <tbody>
+              ${window.testAnswers.map(a => `
+                <tr>
+                  <td>${a.question}</td>
+                  <td>${a.user}</td>
+                  <td>${a.correct}</td>
+                  <td>${a.isCorrect ? '✅' : '❌'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </details>
+        <p style="margin-top:1rem;"><a href="#" onclick="showPage('home')" style="color:var(--primary);">← На главную</a></p>
+      </div>
+    `;
+
+    showPage(resultPageId);
+    window.testAnswers = null;
+  }
+
+  function sendResults(blockId, correct, total, percent, time) {
+    const fio = prompt('Введите ваше ФИО:');
+    if (!fio) return;
+    const url = localStorage.getItem('gsheets_url');
+    if (!url) return showPage('settings');
+
+    const payload = {
+      action: 'save_result',
+      block_id: blockId,
+      fio: fio,
+      correct,
+      total,
+      percent,
+      time
+    };
+
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(() => alert('Результат сохранён!'))
+    .catch(e => alert('Ошибка отправки: ' + e));
+  }
+
+  function startTimer() {
+    if (isTimerRunning) return;
+    isTimerRunning = true;
+    timerSeconds = TIMER_SECONDS;
+    updateTimer();
+    timerInterval = setInterval(updateTimer, 1000);
+  }
+
+  function stopTimer() {
+    isTimerRunning = false;
+    clearInterval(timerInterval);
+  }
+
+  function updateTimer() {
+    if (!isTimerRunning) return;
+    timerSeconds--;
+    if (timerSeconds < 0) {
+      timerSeconds = 0;
+      stopTimer();
+      finishTest();
+    }
+    const bar = document.getElementById('timer-bar');
+    const text = document.getElementById('timer-text');
+    const pct = Math.max(0, Math.min(100, (timerSeconds / TIMER_SECONDS) * 100));
+    bar.style.width = pct + '%';
+    bar.style.background = pct > 10 ? 'var(--primary)' : 'var(--danger)';
+    text.textContent = formatTime(timerSeconds);
+  }
+
+  function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
+
+  function getBlockTitle(id) {
+    return (window.blocksData?.find(b => b.id === id)?.title) || 'Неизвестный блок';
+  }
+
+  function showPage(pageId) {
+    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+    const target = document.getElementById(pageId);
+    if (target) target.classList.remove('hidden');
+  }
+
+  // Запуск
+  init();
+</script>
