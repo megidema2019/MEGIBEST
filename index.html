@@ -1,285 +1,291 @@
-<script>
-  const PASS_THRESHOLD = 0.7;
-  const TIMER_SECONDS = 1200;
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Медицинский портал знаний</title>
+  <style>
+    :root { --primary: #007bff; --success: #28a745; --danger: #dc3545; --warning: #ffc107; --gray: #6c757d; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f6f9; color: #333; }
+    header { background: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    h1 { margin: 0; font-size: 1.4rem; }
+    nav a { margin-right: 1rem; text-decoration: none; color: var(--primary); font-weight: 500; }
+    .container { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: #fff; border-radius: 6px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 6px rgba(0,0,0,.06); }
+    .block-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+    .block-card { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; text-align: center; cursor: pointer; transition: transform .15s; }
+    .block-card:hover { transform: translateY(-3px); border-color: var(--primary); }
+    .btn { display: inline-block; padding: .5rem 1rem; background: var(--primary); color: #fff; text-decoration: none; border-radius: 4px; }
+    .timer-bar { height: 8px; background: #e9ecef; position: fixed; top: 0; left: 0; width: 0%; z-index: 9999; transition: width .2s, background .2s; }
+    .timer-text { position: fixed; top: 12px; right: 16px; background: rgba(255,255,255,.9); padding: 4px 10px; border-radius: 12px; font-weight: bold; z-index: 9998; }
+    .form-group { margin-bottom: .75rem; }
+    label { display: block; margin-bottom: .25rem; font-weight: 600; }
+    input, select, textarea { width: 100%; padding: .5rem; border: 1px solid #ccc; border-radius: 4px; }
+    .results-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    .results-table th, .results-table td { border: 1px solid #ddd; padding: .5rem; text-align: left; }
+    .status-badge { padding: 3px 8px; border-radius: 4px; font-size: .85rem; color: #fff; }
+    .status-passed { background: var(--success); }
+    .status-failed { background: var(--danger); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
 
-  let timerInterval, timerSeconds, isTimerRunning = false;
-  let currentTestBlock = null;
-  let questions = [];
+  <div id="timer-bar" class="timer-bar"></div>
+  <div id="timer-text" class="timer-text">00:00</div>
 
-  function init() {
-    const url = localStorage.getItem('gsheets_url') || '';
-    if (!url) {
-      showPage('settings');
-      return;
+  <header>
+    <h1>🏥 Медицинский портал знаний</h1>
+    <nav>
+      <a href="#" onclick="showPage('home')">Главная</a>
+      <a href="#" onclick="showPage('settings')">⚙️ Настройка</a>
+      <a href="#" onclick="showPage('results')">📊 Результаты</a>
+    </nav>
+  </header>
+
+  <div class="container">
+    <div id="home" class="page">
+      <div class="card">
+        <h2>Добро пожаловать!</h2>
+        <p>Выберите блок для изучения и прохождения теста.</p>
+      </div>
+      <div class="block-grid" id="blocks-list">
+        <!-- Блоки будут загружены из Google Sheets -->
+      </div>
+    </div>
+
+    <div id="settings" class="page hidden">
+      <div class="card">
+        <h2>⚙️ Настройка Google Sheets</h2>
+        <div class="form-group">
+          <label>URL веб‑приложения (из Google Apps Script):</label>
+          <input type="text" id="gsheets-url" placeholder="https://script.google.com/macros/s/..." />
+        </div>
+        <button class="btn" onclick="saveGSheetsUrl()">Сохранить</button>
+        <p style="margin-top:1rem; font-size:.9rem; color:#666;">
+          После сохранения страница перезагрузится и начнёт загружать контент из таблицы.
+        </p>
+      </div>
+    </div>
+
+    <div id="results" class="page hidden">
+      <div class="card">
+        <h2>📊 Мои результаты</h2>
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Блок</th>
+              <th>Балл</th>
+              <th>Статус</th>
+              <th>Время</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+        <button class="btn" style="margin-top:.5rem;" onclick="exportResults()">Экспорт в CSV</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const PASS_THRESHOLD = 0.7;
+    const TIMER_SECONDS = 1200;
+
+    let timerInterval, timerSeconds, isTimerRunning = false;
+    let currentTestBlock = null;
+    let questions = [];
+
+    function init() {
+      const url = localStorage.getItem('gsheets_url') || '';
+      if (!url) {
+        showPage('settings');
+        return;
+      }
+      loadContent(url);
     }
-    loadContent(url);
-  }
 
-  function saveGSheetsUrl() {
-    const input = document.getElementById('gsheets-url');
-    const url = (input ? input.value : '').trim();
-    if (!url) return alert('Введите URL веб‑приложения');
-    localStorage.setItem('gsheets_url', url);
-    location.reload();
-  }
+    function saveGSheetsUrl() {
+      const input = document.getElementById('gsheets-url');
+      const url = (input ? input.value : '').trim();
+      if (!url) return alert('Введите URL веб‑приложения');
+      localStorage.setItem('gsheets_url', url);
+      location.reload();
+    }
 
-  async function loadContent(url) {
-    try {
-      const res = await fetch(url + '?action=get_content');
-      if (!res.ok) throw new Error('Network error: ' + res.status);
-      const data = await res.json();
+    async function loadContent(url) {
+      try {
+        const res = await fetch(url + '?action=get_content');
+        if (!res.ok) throw new Error('Network error: ' + res.status);
+        const data = await res.json();
 
-      const blocksList = document.getElementById('blocks-list');
-      if (!blocksList) throw new Error('Missing blocks-list element');
+        const blocksList = document.getElementById('blocks-list');
+        blocksList.innerHTML = '';
+        data.blocks.forEach(b => {
+          const card = document.createElement('div');
+          card.className = 'block-card';
+          card.innerHTML = `
+            <h3>${b.title}</h3>
+            <p>${b.desc || ''}</p>
+            <button class="btn" onclick="openBlock('${b.id}')">Открыть</button>
+          `;
+          blocksList.appendChild(card);
+        });
 
-      blocksList.innerHTML = '';
-      data.blocks.forEach(b => {
-        const card = document.createElement('div');
-        card.className = 'block-card';
-        card.innerHTML = `
-          <h3>${b.title}</h3>
-          <p>${b.desc || ''}</p>
-          <button class="btn" onclick="openBlock('${b.id}')">Открыть</button>
-        `;
-        blocksList.appendChild(card);
+        window.blocksData = data.blocks;
+      } catch (e) {
+        console.error(e);
+        alert('Не удалось загрузить контент. Проверьте URL и настройки Google Apps Script.');
+        showPage('settings');
+      }
+    }
+
+    function openBlock(id) {
+      const block = window.blocksData?.find(b => b.id === id);
+      if (!block) return;
+
+      const pageId = 'block-' + id;
+      let page = document.getElementById(pageId);
+      if (!page) {
+        page = document.createElement('div');
+        page.id = pageId;
+        page.className = 'page hidden';
+        document.querySelector('.container').appendChild(page);
+      }
+
+      page.innerHTML = `
+        <div class="card">
+          <h2>${block.title}</h2>
+          <div>${block.content || ''}</div>
+          ${block.link ? `<p><a href="${block.link}" target="_blank" class="btn">🔗 Документ</a></p>` : ''}
+          <p style="margin:1.5rem 0;"><strong>Тест по блоку:</strong></p>
+          <button class="btn" onclick="startTest('${id}')">Пройти тест</button>
+          <a href="#" onclick="showPage('home')" style="color:var(--primary);">← Назад</a>
+        </div>
+      `;
+      showPage(pageId);
+    }
+
+    async function startTest(blockId) {
+      currentTestBlock = blockId;
+      const url = localStorage.getItem('gsheets_url');
+      if (!url) return showPage('settings');
+
+      try {
+        const res = await fetch(url + `?action=get_test&block_id=${blockId}`);
+        if (!res.ok) throw new Error('Test load error: ' + res.status);
+        const data = await res.json();
+        questions = data.questions || [];
+      } catch (e) {
+        console.error(e);
+        return alert('Ошибка загрузки теста. Проверьте Google Apps Script и URL.');
+      }
+
+      if (questions.length === 0) return alert('Нет вопросов для этого блока.');
+
+      questions = questions.sort(() => Math.random() - 0.5);
+
+      const pageId = 'test-' + blockId;
+      let page = document.getElementById(pageId);
+      if (!page) {
+        page = document.createElement('div');
+        page.id = pageId;
+        page.className = 'page';
+        document.querySelector('.container').appendChild(page);
+      }
+
+      renderTestPage(page, 0);
+      startTimer();
+    }
+
+    function renderTestPage(pageEl, qIndex) {
+      const q = questions[qIndex];
+      if (!q) return finishTest();
+
+      const options = [];
+      for (let i = 1; i <= 4; i++) {
+        if (q['option' + i]) options.push(q['option' + i]);
+      }
+      options.sort(() => Math.random() - 0.5);
+
+      let optionsHtml = '';
+      options.forEach((opt, idx) => {
+        optionsHtml += `<label><input type="radio" name="answer" value="${opt}" /> ${opt}</label><br />`;
       });
 
-      window.blocksData = data.blocks;
-    } catch (e) {
-      console.error(e);
-      // Если загрузка не удалась — показываем настройки, чтобы можно было поправить URL
-      alert('Не удалось загрузить контент. Проверьте URL и настройки Google Apps Script.');
-      showPage('settings');
-    }
-  }
-
-  function openBlock(id) {
-    const block = window.blocksData?.find(b => b.id === id);
-    if (!block) return;
-
-    const pageId = 'block-' + id;
-    let page = document.getElementById(pageId);
-    if (!page) {
-      page = document.createElement('div');
-      page.id = pageId;
-      page.className = 'page hidden';
-      document.querySelector('.container').appendChild(page);
+      pageEl.innerHTML = `
+        <div class="card">
+          <h3>Вопрос ${qIndex + 1} из ${questions.length}</h3>
+          <p>${q.question}</p>
+          <form onsubmit="handleAnswer(event, ${qIndex})">
+            ${optionsHtml}
+            <br />
+            <button type="submit" class="btn">Далее</button>
+          </form>
+        </div>
+      `;
     }
 
-    page.innerHTML = `
-      <div class="card">
-        <h2>${block.title}</h2>
-        <div>${block.content || ''}</div>
-        ${block.link ? `<p><a href="${block.link}" target="_blank" class="btn">🔗 Документ</a></p>` : ''}
-        <p style="margin:1.5rem 0;"><strong>Тест по блоку:</strong></p>
-        <button class="btn" onclick="startTest('${id}')">Пройти тест</button>
-        <a href="#" onclick="showPage('home')" style="color:var(--primary);">← Назад</a>
-      </div>
-    `;
-    showPage(pageId);
-  }
+    function handleAnswer(e, qIndex) {
+      e.preventDefault();
+      const selected = document.querySelector('input[name="answer"]:checked');
+      if (!selected) return alert('Выберите ответ');
 
-  async function startTest(blockId) {
-    currentTestBlock = blockId;
-    const url = localStorage.getItem('gsheets_url');
-    if (!url) return showPage('settings');
+      const userAnswer = selected.value;
+      const correctAnswer = questions[qIndex].correct;
 
-    try {
-      const res = await fetch(url + `?action=get_test&block_id=${blockId}`);
-      if (!res.ok) throw new Error('Test load error: ' + res.status);
-      const data = await res.json();
-      questions = data.questions || [];
-    } catch (e) {
-      console.error(e);
-      return alert('Ошибка загрузки теста. Проверьте Google Apps Script и URL.');
+      if (!window.testAnswers) window.testAnswers = [];
+      window.testAnswers.push({
+        question: questions[qIndex].question,
+        user: userAnswer,
+        correct: correctAnswer,
+        isCorrect: userAnswer === correctAnswer
+      });
+
+      renderTestPage(document.getElementById('test-' + currentTestBlock), qIndex + 1);
     }
 
-    if (questions.length === 0) return alert('Нет вопросов для этого блока.');
-
-    questions = questions.sort(() => Math.random() - 0.5);
-
-    const pageId = 'test-' + blockId;
-    let page = document.getElementById(pageId);
-    if (!page) {
-      page = document.createElement('div');
-      page.id = pageId;
-      page.className = 'page';
-      document.querySelector('.container').appendChild(page);
-    }
-
-    renderTestPage(page, 0);
-    startTimer();
-  }
-
-  function renderTestPage(pageEl, qIndex) {
-    const q = questions[qIndex];
-    if (!q) return finishTest();
-
-    const options = [];
-    for (let i = 1; i <= 4; i++) {
-      if (q['option' + i]) options.push(q['option' + i]);
-    }
-    options.sort(() => Math.random() - 0.5);
-
-    let optionsHtml = '';
-    options.forEach((opt, idx) => {
-      optionsHtml += `<label><input type="radio" name="answer" value="${opt}" /> ${opt}</label><br />`;
-    });
-
-    pageEl.innerHTML = `
-      <div class="card">
-        <h3>Вопрос ${qIndex + 1} из ${questions.length}</h3>
-        <p>${q.question}</p>
-        <form onsubmit="handleAnswer(event, ${qIndex})">
-          ${optionsHtml}
-          <br />
-          <button type="submit" class="btn">Далее</button>
-        </form>
-      </div>
-    `;
-  }
-
-  function handleAnswer(e, qIndex) {
-    e.preventDefault();
-    const selected = document.querySelector('input[name="answer"]:checked');
-    if (!selected) return alert('Выберите ответ');
-
-    const userAnswer = selected.value;
-    const correctAnswer = questions[qIndex].correct;
-
-    if (!window.testAnswers) window.testAnswers = [];
-    window.testAnswers.push({
-      question: questions[qIndex].question,
-      user: userAnswer,
-      correct: correctAnswer,
-      isCorrect: userAnswer === correctAnswer
-    });
-
-    renderTestPage(document.getElementById('test-' + currentTestBlock), qIndex + 1);
-  }
-
-  function finishTest() {
-    stopTimer();
-    const total = window.testAnswers?.length || 0;
-    const correct = window.testAnswers?.filter(a => a.isCorrect).length || 0;
-    const percent = total ? (correct / total) * 100 : 0;
-    const passed = percent >= PASS_THRESHOLD * 100;
-
-    const resultPageId = 'result-' + currentTestBlock;
-    let resultPage = document.getElementById(resultPageId);
-    if (!resultPage) {
-      resultPage = document.createElement('div');
-      resultPage.id = resultPageId;
-      resultPage.className = 'page';
-      document.querySelector('.container').appendChild(resultPage);
-    }
-
-    resultPage.innerHTML = `
-      <div class="card">
-        <h2>Результаты теста</h2>
-        <p><strong>Блок:</strong> ${getBlockTitle(currentTestBlock)}</p>
-        <p><strong>Балл:</strong> ${correct} / ${total} (${percent.toFixed(1)}%)</p>
-        <p><strong>Статус:</strong> <span class="status-badge ${passed ? 'status-passed' : 'status-failed'}">
-          ${passed ? 'СДАН' : 'НЕ СДАН'}
-        </span></p>
-        <p><strong>Время:</strong> ${formatTime(TIMER_SECONDS - timerSeconds)}</p>
-        <button class="btn" onclick="sendResults('${currentTestBlock}', '${correct}', '${total}', '${percent}', '${formatTime(TIMER_SECONDS - timerSeconds)}')">Сохранить результат</button>
-        <br /><br />
-        <details>
-          <summary>Показать разбор ответов</summary>
-          <table class="results-table">
-            <thead><tr><th>Вопрос</th><th>Ваш ответ</th><th>Правильный</th><th>Верно?</th></tr></thead>
-            <tbody>
-              ${window.testAnswers.map(a => `
-                <tr>
-                  <td>${a.question}</td>
-                  <td>${a.user}</td>
-                  <td>${a.correct}</td>
-                  <td>${a.isCorrect ? '✅' : '❌'}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </details>
-        <p style="margin-top:1rem;"><a href="#" onclick="showPage('home')" style="color:var(--primary);">← На главную</a></p>
-      </div>
-    `;
-
-    showPage(resultPageId);
-    window.testAnswers = null;
-  }
-
-  function sendResults(blockId, correct, total, percent, time) {
-    const fio = prompt('Введите ваше ФИО:');
-    if (!fio) return;
-    const url = localStorage.getItem('gsheets_url');
-    if (!url) return showPage('settings');
-
-    const payload = {
-      action: 'save_result',
-      block_id: blockId,
-      fio: fio,
-      correct,
-      total,
-      percent,
-      time
-    };
-
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    })
-    .then(res => res.json())
-    .then(() => alert('Результат сохранён!'))
-    .catch(e => alert('Ошибка отправки: ' + e));
-  }
-
-  function startTimer() {
-    if (isTimerRunning) return;
-    isTimerRunning = true;
-    timerSeconds = TIMER_SECONDS;
-    updateTimer();
-    timerInterval = setInterval(updateTimer, 1000);
-  }
-
-  function stopTimer() {
-    isTimerRunning = false;
-    clearInterval(timerInterval);
-  }
-
-  function updateTimer() {
-    if (!isTimerRunning) return;
-    timerSeconds--;
-    if (timerSeconds < 0) {
-      timerSeconds = 0;
+    function finishTest() {
       stopTimer();
-      finishTest();
-    }
-    const bar = document.getElementById('timer-bar');
-    const text = document.getElementById('timer-text');
-    const pct = Math.max(0, Math.min(100, (timerSeconds / TIMER_SECONDS) * 100));
-    bar.style.width = pct + '%';
-    bar.style.background = pct > 10 ? 'var(--primary)' : 'var(--danger)';
-    text.textContent = formatTime(timerSeconds);
-  }
+      const total = window.testAnswers?.length || 0;
+      const correct = window.testAnswers?.filter(a => a.isCorrect).length || 0;
+      const percent = total ? (correct / total) * 100 : 0;
+      const passed = percent >= PASS_THRESHOLD * 100;
 
-  function formatTime(seconds) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  }
+      const resultPageId = 'result-' + currentTestBlock;
+      let resultPage = document.getElementById(resultPageId);
+      if (!resultPage) {
+        resultPage = document.createElement('div');
+        resultPage.id = resultPageId;
+        resultPage.className = 'page';
+        document.querySelector('.container').appendChild(resultPage);
+      }
 
-  function getBlockTitle(id) {
-    return (window.blocksData?.find(b => b.id === id)?.title) || 'Неизвестный блок';
-  }
-
-  function showPage(pageId) {
-    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
-    const target = document.getElementById(pageId);
-    if (target) target.classList.remove('hidden');
-  }
-
-  // Запуск
-  init();
-</script>
+      resultPage.innerHTML = `
+        <div class="card">
+          <h2>Результаты теста</h2>
+          <p><strong>Блок:</strong> ${getBlockTitle(currentTestBlock)}</p>
+          <p><strong>Балл:</strong> ${correct} / ${total} (${percent.toFixed(1)}%)</p>
+          <p><strong>Статус:</strong> <span class="status-badge ${passed ? 'status-passed' : 'status-failed'}">
+            ${passed ? 'СДАН' : 'НЕ СДАН'}
+          </span></p>
+          <p><strong>Время:</strong> ${formatTime(TIMER_SECONDS - timerSeconds)}</p>
+          <button class="btn" onclick="sendResults('${currentTestBlock}', '${correct}', '${total}', '${percent}', '${formatTime(TIMER_SECONDS - timerSeconds)}')">Сохранить результат</button>
+          <br /><br />
+          <details>
+            <summary>Показать разбор ответов</summary>
+            <table class="results-table">
+              <thead><tr><th>Вопрос</th><th>Ваш ответ</th><th>Правильный</th><th>Верно?</th></tr></thead>
+              <tbody>
+                ${window.testAnswers.map(a => `
+                  <tr>
+                    <td>${a.question}</td>
+                    <td>${a.user}</td>
+                    <td>${a.correct}</td>
+                    <td>${a.isCorrect ? '✅' : '❌'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </details>
+          <p style="margin-top:1rem;"><a href="#" onclick="show
