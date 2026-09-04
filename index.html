@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Медицинский портал знаний</title>
   <style>
-    :root { --primary: #007bff; --success: #28a745; --danger: #dc3545; --warning: #ffc107; --gray: #6c757d; }
+    :root { --primary: #007bff; --success: #28a745; --danger: #dc3545; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f6f9; color: #333; }
     header { background: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
     h1 { margin: 0; font-size: 1.4rem; }
-    nav a { margin-right: 1rem; text-decoration: none; color: var(--primary); font-weight: 500; }
+    nav a { margin-right: 1rem; text-decoration: none; color: var(--primary); font-weight: 500; cursor: pointer; }
     .container { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
     .card { background: #fff; border-radius: 6px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 6px rgba(0,0,0,.06); }
     .block-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
@@ -37,9 +37,9 @@
   <header>
     <h1>🏥 Медицинский портал знаний</h1>
     <nav>
-      <a href="#" onclick="showPage('home')">Главная</a>
-      <a href="#" onclick="showPage('settings')">⚙️ Настройка</a>
-      <a href="#" onclick="showPage('results')">📊 Результаты</a>
+      <a onclick="showPage('home')">Главная</a>
+      <a onclick="showPage('settings')">⚙️ Настройка</a>
+      <a onclick="showPage('results')">📊 Результаты</a>
     </nav>
   </header>
 
@@ -50,7 +50,7 @@
         <p>Выберите блок для изучения и прохождения теста.</p>
       </div>
       <div class="block-grid" id="blocks-list">
-        <!-- Блоки будут загружены из Google Sheets -->
+        <!-- Блоки подгрузятся сюда -->
       </div>
     </div>
 
@@ -96,13 +96,26 @@
     let currentTestBlock = null;
     let questions = [];
 
+    // --- ГЛАВНАЯ ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ СТРАНИЦ (обязательно должна быть!) ---
+    function showPage(pageId) {
+      document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+      const target = document.getElementById(pageId);
+      if (target) {
+        target.classList.remove('hidden');
+      }
+    }
+
     function init() {
       const url = localStorage.getItem('gsheets_url') || '';
       if (!url) {
         showPage('settings');
         return;
       }
-      loadContent(url);
+      loadContent(url).catch(err => {
+        console.error(err);
+        alert('Не удалось загрузить контент. Проверьте URL и настройки Google Apps Script.');
+        showPage('settings');
+      });
     }
 
     function saveGSheetsUrl() {
@@ -114,30 +127,24 @@
     }
 
     async function loadContent(url) {
-      try {
-        const res = await fetch(url + '?action=get_content');
-        if (!res.ok) throw new Error('Network error: ' + res.status);
-        const data = await res.json();
+      const res = await fetch(url + '?action=get_content');
+      if (!res.ok) throw new Error('Network error: ' + res.status);
+      const data = await res.json();
 
-        const blocksList = document.getElementById('blocks-list');
-        blocksList.innerHTML = '';
-        data.blocks.forEach(b => {
-          const card = document.createElement('div');
-          card.className = 'block-card';
-          card.innerHTML = `
-            <h3>${b.title}</h3>
-            <p>${b.desc || ''}</p>
-            <button class="btn" onclick="openBlock('${b.id}')">Открыть</button>
-          `;
-          blocksList.appendChild(card);
-        });
+      const blocksList = document.getElementById('blocks-list');
+      blocksList.innerHTML = '';
+      data.blocks.forEach(b => {
+        const card = document.createElement('div');
+        card.className = 'block-card';
+        card.innerHTML = `
+          <h3>${b.title}</h3>
+          <p>${b.desc || ''}</p>
+          <button class="btn" onclick="openBlock('${b.id}')">Открыть</button>
+        `;
+        blocksList.appendChild(card);
+      });
 
-        window.blocksData = data.blocks;
-      } catch (e) {
-        console.error(e);
-        alert('Не удалось загрузить контент. Проверьте URL и настройки Google Apps Script.');
-        showPage('settings');
-      }
+      window.blocksData = data.blocks;
     }
 
     function openBlock(id) {
@@ -171,18 +178,12 @@
       const url = localStorage.getItem('gsheets_url');
       if (!url) return showPage('settings');
 
-      try {
-        const res = await fetch(url + `?action=get_test&block_id=${blockId}`);
-        if (!res.ok) throw new Error('Test load error: ' + res.status);
-        const data = await res.json();
-        questions = data.questions || [];
-      } catch (e) {
-        console.error(e);
-        return alert('Ошибка загрузки теста. Проверьте Google Apps Script и URL.');
-      }
+      const res = await fetch(url + `?action=get_test&block_id=${blockId}`);
+      if (!res.ok) throw new Error('Test load error: ' + res.status);
+      const data = await res.json();
+      questions = data.questions || [];
 
       if (questions.length === 0) return alert('Нет вопросов для этого блока.');
-
       questions = questions.sort(() => Math.random() - 0.5);
 
       const pageId = 'test-' + blockId;
@@ -288,4 +289,91 @@
               </tbody>
             </table>
           </details>
-          <p style="margin-top:1rem;"><a href="#" onclick="show
+          <p style="margin-top:1rem;"><a href="#" onclick="showPage('home')" style="color:var(--primary);">← На главную</a></p>
+        </div>
+      `;
+
+      showPage(resultPageId);
+      window.testAnswers = null;
+    }
+
+    function sendResults(blockId, correct, total, percent, time) {
+      const fio = prompt('Введите ваше ФИО:');
+      if (!fio) return;
+      const url = localStorage.getItem('gsheets_url');
+      if (!url) return showPage('settings');
+
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_result',
+          block_id: blockId,
+          fio: fio,
+          correct,
+          total,
+          percent,
+          time
+        })
+      })
+      .then(res => res.json())
+      .then(() => alert('Результат сохранён!'))
+      .catch(e => alert('Ошибка отправки: ' + e));
+    }
+
+    function startTimer() {
+      if(isTimerRunning) return;
+      isTimerRunning = true;
+      timerSeconds = TIMER_SECONDS;
+      updateTimer();
+      timerInterval = setInterval(updateTimer, 1000);
+    }
+
+    function stopTimer() {
+      isTimerRunning = false;
+      clearInterval(timerInterval);
+    }
+
+    function updateTimer() {
+      if (!isTimerRunning) return;
+      timerSeconds--;
+      if (timerSeconds < 0) {
+        timerSeconds = 0;
+        stopTimer();
+        finishTest();
+      }
+      const bar = document.getElementById('timer-bar');
+      const text = document.getElementById('timer-text');
+      const pct = Math.max(0, Math.min(100, (timerSeconds / TIMER_SECONDS) * 100));
+      bar.style.width = pct + '%';
+      bar.style.background = pct > 10 ? 'var(--primary)' : 'var(--danger)';
+      text.textContent = formatTime(timerSeconds);
+    }
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function getBlockTitle(id) {
+      return (window.blocksData?.find(b => b.id === id)?.title) || 'Неизвестный блок';
+    }
+
+    function exportResults() {
+      let csv = 'Дата,Блок,Балл,Статус,Время\n';
+      const stored = JSON.parse(localStorage.getItem('test_results') || '[]');
+      stored.forEach(r => {
+        csv += `${r.date},${r.block},${r.score},${r.status},${r.time}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'results.csv';
+      link.click();
+    }
+
+    // Запуск при загрузке страницы
+    init();
+  </script>
+</html>
